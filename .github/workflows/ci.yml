@@ -1,0 +1,57 @@
+name: CI — Verificación Dr Agenda Núcleos
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  verify:
+    name: Tipos, Compilación, Migraciones y Pruebas Críticas (A01-A28)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54322:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      APP_JWT_SECRET: ci_test_secret_key_for_automated_verification_only_32c
+      ENVIRONMENT: test
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Verificar tipos TypeScript (Frontend + Backend + Worker)
+        run: npm run typecheck
+
+      - name: Aplicar migraciones de Supabase PostgreSQL y datos ficticios (Seed)
+        run: npm run db:reset
+
+      - name: Ejecutar pruebas críticas de agenda, concurrencia, cobros y RLS
+        run: npm test
+
+      - name: Compilar aplicación PWA y bundle de Cloudflare Workers
+        run: npm run build

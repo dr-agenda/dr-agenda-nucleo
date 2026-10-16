@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "dr-agenda-nucleos",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "PUBLIC_APP_URL": "http://localhost:8787"
+  },
+  "env": {
+    "staging": {
+      "name": "dr-agenda-nucleos-staging",
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "PUBLIC_APP_URL": "https://staging.dr-agenda-nucleos.workers.dev"
+      }
+    },
+    "production": {
+      "name": "dr-agenda-nucleos-prod",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "PUBLIC_APP_URL": "https://nucleos.dragenda.mx"
+      }
+    }
+  }
+}
