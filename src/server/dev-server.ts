@@ -1,0 +1,11 @@
+import { serve } from '@hono/node-server';
+import { app } from './app';
+
+const port = Number(process.env.PORT || 8787);
+
+console.log(`⚡ Servidor API Dr Agenda Núcleos iniciando en http://localhost:${port}`);
+
+serve({
+  fetch: app.fetch,
+  port,
+});
