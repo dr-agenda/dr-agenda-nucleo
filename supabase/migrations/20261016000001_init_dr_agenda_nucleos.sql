@@ -13,14 +13,17 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "btree_gist";
+SET search_path TO public, extensions;
 
 -- -----------------------------------------------------------------------------
 -- 0. Compatibilidad de Esquema Auth (Supabase Cloud / Local CLI / PostgreSQL)
 -- -----------------------------------------------------------------------------
-CREATE SCHEMA IF NOT EXISTS auth;
-
 DO $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'auth') THEN
+    EXECUTE 'CREATE SCHEMA auth';
+  END IF;
+
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
     CREATE ROLE anon NOLOGIN NOINHERIT;
   END IF;
@@ -30,42 +33,83 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
   END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'auth' AND table_name = 'users'
+  ) THEN
+    EXECUTE $tbl$
+      CREATE TABLE auth.users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email TEXT UNIQUE NOT NULL,
+        encrypted_password TEXT NOT NULL,
+        raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    $tbl$;
+  END IF;
 END
 $$;
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
 
-CREATE TABLE IF NOT EXISTS auth.users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email TEXT UNIQUE NOT NULL,
-  encrypted_password TEXT NOT NULL,
-  raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE OR REPLACE FUNCTION auth.uid()
-RETURNS UUID
-LANGUAGE sql
-STABLE
-AS $$
-  SELECT COALESCE(
-    NULLIF(current_setting('request.jwt.claim.sub', true), ''),
-    (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
-  )::uuid;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
+    SET LOCAL ROLE supabase_auth_admin;
+  END IF;
+  GRANT USAGE ON SCHEMA auth TO postgres, anon, authenticated, service_role;
+  ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+  GRANT ALL ON TABLE auth.users TO postgres, service_role;
+  GRANT SELECT ON TABLE auth.users TO authenticated;
+  RESET ROLE;
+EXCEPTION WHEN OTHERS THEN
+  RESET ROLE;
+END
 $$;
 
-CREATE OR REPLACE FUNCTION auth.jwt()
-RETURNS JSONB
-LANGUAGE sql
-STABLE
-AS $$
-  SELECT COALESCE(
-    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
-    '{}'::jsonb
-  );
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'auth' AND p.proname = 'uid'
+  ) THEN
+    EXECUTE $fn$
+      CREATE FUNCTION auth.uid()
+      RETURNS UUID
+      LANGUAGE sql
+      STABLE
+      AS $body$
+        SELECT COALESCE(
+          NULLIF(current_setting('request.jwt.claim.sub', true), ''),
+          (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+        )::uuid;
+      $body$;
+    $fn$;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'auth' AND p.proname = 'jwt'
+  ) THEN
+    EXECUTE $fn$
+      CREATE FUNCTION auth.jwt()
+      RETURNS JSONB
+      LANGUAGE sql
+      STABLE
+      AS $body$
+        SELECT COALESCE(
+          NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
+          '{}'::jsonb
+        );
+      $body$;
+    $fn$;
+  END IF;
+END
 $$;
 
 -- -----------------------------------------------------------------------------
@@ -646,6 +690,37 @@ BEGIN
 END;
 $$;
 
+-- Función compatible con Supabase Cloud y PostgreSQL local para verificar usuario activo
+CREATE OR REPLACE FUNCTION public.is_auth_user_active(p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_has_is_active_col BOOLEAN;
+  v_active BOOLEAN := false;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'auth' AND table_name = 'users' AND column_name = 'is_active'
+  ) INTO v_has_is_active_col;
+
+  IF v_has_is_active_col THEN
+    EXECUTE 'SELECT COALESCE(is_active, true) FROM auth.users WHERE id = $1'
+      INTO v_active
+      USING p_user_id;
+  ELSE
+    SELECT COALESCE((u.raw_user_meta_data->>'is_active')::boolean, true)
+      INTO v_active
+      FROM auth.users u
+      WHERE u.id = p_user_id;
+  END IF;
+
+  RETURN COALESCE(v_active, false);
+END;
+$$;
+
 -- Funciones para políticas RLS basadas en auth.uid()
 CREATE OR REPLACE FUNCTION public.user_has_org_membership(p_org_id UUID)
 RETURNS BOOLEAN
@@ -660,7 +735,7 @@ AS $$
     WHERE m.organization_id = p_org_id
       AND m.user_id = auth.uid()
       AND m.is_active = true
-      AND u.is_active = true
+      AND public.is_auth_user_active(u.id) = true
   );
 $$;
 
@@ -676,7 +751,7 @@ AS $$
   WHERE m.organization_id = p_org_id
     AND m.user_id = auth.uid()
     AND m.is_active = true
-    AND u.is_active = true
+    AND public.is_auth_user_active(u.id) = true
   LIMIT 1;
 $$;
 
@@ -694,7 +769,7 @@ AS $$
     WHERE m.organization_id = p_org_id
       AND m.user_id = auth.uid()
       AND m.is_active = true
-      AND u.is_active = true
+      AND public.is_auth_user_active(u.id) = true
       AND (
         m.role IN ('admin', 'cashier')
         OR (m.role = 'professional' AND p.id = p_prof_id AND p.is_active = true)

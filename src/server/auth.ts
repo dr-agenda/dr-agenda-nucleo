@@ -82,7 +82,7 @@ export async function authenticateWithPassword(
     SELECT
       u.id AS user_id,
       u.email,
-      u.is_active AS user_active,
+      public.is_auth_user_active(u.id) AS user_active,
       m.organization_id,
       m.role,
       m.full_name,
@@ -102,7 +102,7 @@ export async function authenticateWithPassword(
       AND p.is_active = true
     WHERE LOWER(u.email) = ${normalizedEmail}
       AND u.encrypted_password = crypt(${password}, u.encrypted_password)
-      AND u.is_active = true
+      AND public.is_auth_user_active(u.id) = true
       AND m.is_active = true
       AND o.status = 'active'
     ORDER BY m.created_at ASC
@@ -173,7 +173,7 @@ export async function resolveActiveSessionUser(
       AND p.user_id = u.id
       AND p.is_active = true
     WHERE u.id = ${payload.sub}
-      AND u.is_active = true
+      AND public.is_auth_user_active(u.id) = true
       AND m.is_active = true
       AND o.status = 'active'
     LIMIT 1

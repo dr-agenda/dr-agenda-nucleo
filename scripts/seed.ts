@@ -51,6 +51,7 @@ export async function seedDatabase(customUrl?: string) {
     console.log('🌱 Cargando datos de demostración (Ginecóloga, Internista, Nutrióloga, Psicóloga + Asistente)...');
 
     await sql.begin(async (tx) => {
+      await tx.unsafe(`SET LOCAL search_path TO public, extensions;`);
       await tx.unsafe(`
         TRUNCATE TABLE
           public.clinical_records,
@@ -75,8 +76,7 @@ export async function seedDatabase(customUrl?: string) {
           public.resources,
           public.memberships,
           public.locations,
-          public.organizations,
-          auth.users
+          public.organizations
         RESTART IDENTITY CASCADE;
       `);
 
@@ -128,14 +128,17 @@ export async function seedDatabase(customUrl?: string) {
 
       for (const u of users) {
         await tx`
-          INSERT INTO auth.users (id, email, encrypted_password, raw_user_meta_data, is_active)
+          INSERT INTO auth.users (id, email, encrypted_password, raw_user_meta_data)
           VALUES (
             ${u.id},
             ${u.email},
             crypt('Demo2026!', gen_salt('bf')),
-            ${tx.json({ full_name: u.name, demo_role: u.role })},
-            true
+            ${tx.json({ full_name: u.name, demo_role: u.role, is_active: true })}
           )
+          ON CONFLICT (id) DO UPDATE SET
+            email = EXCLUDED.email,
+            encrypted_password = EXCLUDED.encrypted_password,
+            raw_user_meta_data = EXCLUDED.raw_user_meta_data
         `;
       }
 
