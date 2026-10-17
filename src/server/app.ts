@@ -2195,9 +2195,15 @@ app.post('/api/v1/professionals/:id/whatsapp/connect', async (c) => {
         prof.whatsapp_instance_name ||
         `consultorio-${prof.slug}`;
 
+      const effectiveApiKey =
+        integ?.evolution_api_key_encrypted ||
+        (c.env as Record<string, string | undefined>)?.EVOLUTION_API_KEY ||
+        (typeof process !== 'undefined' ? process.env.EVOLUTION_API_KEY : '') ||
+        'DrAgendas_WA_ClaveSecreta_2026_Demo';
+
       const evoRes = await connectEvolutionInstance({
         baseUrl: integ?.evolution_api_url || 'https://whatsapp.dragendas.com',
-        apiKey: integ?.evolution_api_key_encrypted || '',
+        apiKey: effectiveApiKey,
         instanceName,
       });
 
@@ -2336,9 +2342,15 @@ app.post('/api/v1/professionals/:id/whatsapp/test', async (c) => {
       const targetPhone = body.recipientPhone?.trim() || prof.whatsapp_phone || '+525511223344';
       const instanceName = prof.whatsapp_instance_name || `consultorio-${prof.slug}`;
 
+      const effectiveApiKey =
+        integ?.evolution_api_key_encrypted ||
+        (c.env as Record<string, string | undefined>)?.EVOLUTION_API_KEY ||
+        (typeof process !== 'undefined' ? process.env.EVOLUTION_API_KEY : '') ||
+        'DrAgendas_WA_ClaveSecreta_2026_Demo';
+
       const sendResult = await sendEvolutionWhatsAppMessage({
         baseUrl: integ?.evolution_api_url || 'https://whatsapp.dragendas.com',
-        apiKey: integ?.evolution_api_key_encrypted || '',
+        apiKey: effectiveApiKey,
         instanceName,
         phoneNormalized: targetPhone,
         text: renderedMessage,
