@@ -25,7 +25,7 @@
       "name": "dr-agenda-nucleos-prod",
       "vars": {
         "ENVIRONMENT": "production",
-        "PUBLIC_APP_URL": "https://nucleos.dragenda.mx"
+        "PUBLIC_APP_URL": "https://multiagenda.dragendas.com"
       }
     }
   }

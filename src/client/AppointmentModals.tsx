@@ -162,10 +162,10 @@ export const NewAppointmentModal: React.FC<{
         <div className="bg-[#0B2138] text-white px-6 py-4 flex items-center justify-between">
           <div>
             <h2 id="modal-new-appt-title" className="text-lg font-bold">
-              Agendar nueva cita desde recepción
+              Agendar nueva cita · Control de Asistente
             </h2>
             <p className="text-xs text-slate-300">
-              Validación transaccional de profesional, servicio y consultorio compartido
+              Validación transaccional de especialista, servicio y consultorio compartido
             </p>
           </div>
           <button
@@ -191,7 +191,7 @@ export const NewAppointmentModal: React.FC<{
           <div className="grid sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Profesional de la salud *
+                Especialista *
               </label>
               <select
                 value={professionalId}
@@ -265,12 +265,12 @@ export const NewAppointmentModal: React.FC<{
                 onChange={(e) => setOriginChannel(e.target.value as OriginChannel)}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white"
               >
-                <option value="whatsapp_manual">WhatsApp Recepción</option>
+                <option value="whatsapp_manual">WhatsApp Asistente</option>
                 <option value="phone">Llamada Telefónica</option>
-                <option value="reception">Presencial en Recepción</option>
+                <option value="reception">Presencial con Asistente</option>
                 <option value="facebook">Campaña Facebook</option>
                 <option value="google">Campaña Google</option>
-                <option value="referral">Paciente Referido</option>
+                <option value="referral">Paciente Referido / Doctoralia</option>
               </select>
             </div>
           </div>

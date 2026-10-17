@@ -422,11 +422,21 @@ describe('Dr Agenda Núcleos — Matriz de Pruebas de Aceptación (A01–A27)', 
       sql`DELETE FROM public.financial_movements WHERE id = ${partialPay.data.movementId}`
     ).rejects.toThrow(/inmutable/);
 
-    // A14: Intentar marcar como "No asistió" (no_show) una cita futura (2026-10-17 11:30)
-    const futureAppts = await apiRequest('/api/v1/appointments?date=2026-10-17', {
+    // A14: Intentar marcar como "No asistió" (no_show) una cita futura (2026-10-23 11:30)
+    const futureBookRes = await apiRequest('/api/v1/appointments', {
+      method: 'POST',
       token: receptionToken,
+      body: {
+        professionalId: SEED_IDS.profSofia,
+        serviceId: SEED_IDS.srvSofiaGeneral,
+        startsAt: '2026-10-23T11:30:00-06:00',
+        patientName: 'Paciente Cita Futura A14',
+        patientPhone: '55 7070 8080',
+        idempotencyKey: 'future-appt-a14-test',
+      },
     });
-    const futureAppt = futureAppts.data.appointments[0];
+    expect(futureBookRes.status).toBe(201);
+    const futureAppt = futureBookRes.data.appointment;
     const futureNoShow = await apiRequest(`/api/v1/appointments/${futureAppt.id}/status`, {
       method: 'POST',
       token: receptionToken,
@@ -570,5 +580,70 @@ describe('Dr Agenda Núcleos — Matriz de Pruebas de Aceptación (A01–A27)', 
     );
     expect(apptStillExists.status).toBe(200);
   });
+
+  it('A28, A29 & A30: 4 Especialidades (Ginecóloga, Internista, Nutrióloga, Psicóloga), Expedientes Clínicos aislados por RLS, WhatsApp individual (Evolution API) y puente Doctoralia', async () => {
+    // 1. Verificar que el catálogo tiene las 4 especialidades con sus títulos e instancias de WhatsApp individuales
+    const catRes = await apiRequest('/api/v1/catalog', { token: receptionToken });
+    expect(catRes.status).toBe(200);
+    const titles = catRes.data.professionals.map((p: { full_name: string }) => p.full_name);
+    expect(titles).toEqual(
+      expect.arrayContaining(['Ginecóloga', 'Internista', 'Nutrióloga', 'Psicóloga'])
+    );
+
+    // 2. A28: Aislamiento de Expedientes Clínicos: Asistente (reception) recibe 403 al intentar leer notas clínicas
+    const assistantReadsEhr = await apiRequest('/api/v1/clinical-records', {
+      token: receptionToken,
+    });
+    expect(assistantReadsEhr.status).toBe(403);
+
+    // Ginecóloga sólo ve sus propios expedientes clínicos (no ve Psicología ni Medicina Interna)
+    const gineEhr = await apiRequest('/api/v1/clinical-records', {
+      token: sofiaToken,
+    });
+    expect(gineEhr.status).toBe(200);
+    expect(gineEhr.data.records.length).toBeGreaterThan(0);
+    for (const rec of gineEhr.data.records) {
+      expect(rec.professional_id).toBe(SEED_IDS.profSofia);
+      expect(rec.specialty_type).toBe('ginecologia');
+    }
+
+    // 3. A29: Configuración Evolution API (whatsapp.dragendas.com) y vinculación QR individual por especialista
+    const settingsRes = await apiRequest('/api/v1/integrations/settings', {
+      token: adminToken,
+    });
+    expect(settingsRes.status).toBe(200);
+    expect(settingsRes.data.settings.evolution_api_url).toBe('https://whatsapp.dragendas.com');
+
+    const waConnect = await apiRequest(
+      `/api/v1/professionals/${SEED_IDS.profPsico}/whatsapp/connect`,
+      {
+        method: 'POST',
+        token: receptionToken,
+        body: {
+          instanceName: 'consultorio-psicologa',
+          whatsappPhone: '+525544440004',
+        },
+      }
+    );
+    expect(waConnect.status).toBe(200);
+    expect(waConnect.data.instanceName).toBe('consultorio-psicologa');
+    expect(waConnect.data.qrCodeBase64).toContain('data:image/svg+xml');
+
+    // 4. A30: Simulación de cita entrante desde Doctoralia sincronizada en la agenda y confirmada por el WhatsApp de la especialista
+    const docSim = await apiRequest('/api/v1/integrations/doctoralia/simulate-booking', {
+      method: 'POST',
+      token: receptionToken,
+      body: {
+        professionalId: SEED_IDS.profSofia,
+        date: '2026-10-24',
+        patientName: 'Paciente Doctoralia Ginecología',
+        patientPhone: '55 9191 0202',
+      },
+    });
+    expect(docSim.status).toBe(201);
+    expect(docSim.data.appointment.campaign_source).toBe('doctoralia_sync');
+    expect(docSim.data.whatsappDispatchedFrom).toBe('consultorio-ginecologa');
+  });
 });
+
 

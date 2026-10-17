@@ -22,6 +22,11 @@ import {
   reverseOrRefundMovementAtomic,
   updateAttendanceStatusAtomic,
 } from './booking-service';
+import {
+  connectEvolutionInstance,
+  renderWhatsAppTemplate,
+  sendEvolutionWhatsAppMessage,
+} from './evolution';
 import { getLocalDayUtcBounds, getLocalParts, normalizeMexicanPhone } from '../shared/timezone';
 import type {
   AppointmentDTO,
@@ -93,34 +98,40 @@ app.get('/api/v1/auth/demo-accounts', async (c) => {
   return c.json({
     accounts: [
       {
-        label: 'Laura · Recepción (Núcleo Demo)',
+        label: 'Laura · Asistente (Control General de Citas)',
         email: 'laura@nucleodemo.mx',
-        role: 'Recepción',
-        description: 'Agenda citas, registra llegadas/pagos y comparte enlaces de los 3 profesionales.',
+        role: 'Asistente',
+        description: 'Controla las agendas de todas las especialistas, registra llegadas/cobros y gestiona recordatorios.',
       },
       {
-        label: 'Dr. Alejandro Vega · Administrador',
+        label: 'Dirección · Administrador del Núcleo',
         email: 'admin@nucleodemo.mx',
         role: 'Administrador',
-        description: 'Vista consolidada, configuración de servicios, horarios, consultorios y reversos.',
+        description: 'Vista consolidada, configuración de Evolution API (WhatsApp), Doctoralia, horarios y reversos.',
       },
       {
-        label: 'Dra. Sofía García · Medicina general',
+        label: 'Ginecóloga · Ginecología y Obstetricia',
         email: 'sofia@nucleodemo.mx',
-        role: 'Profesional',
-        description: 'Acceso exclusivo a su propia agenda y pacientes (aislamiento por profesional).',
+        role: 'Especialista',
+        description: 'Agenda individual, expediente ginecológico privado y WhatsApp propio (consultorio-ginecologa).',
       },
       {
-        label: 'Dr. Pablo Ruiz · Cardiología',
+        label: 'Internista · Medicina Interna',
         email: 'pablo@nucleodemo.mx',
-        role: 'Profesional',
-        description: 'Acceso exclusivo a su agenda de Cardiología.',
+        role: 'Especialista',
+        description: 'Agenda individual, expediente clínico de medicina interna y WhatsApp propio (consultorio-internista).',
       },
       {
-        label: 'Lic. Elena Martínez · Nutrición',
+        label: 'Nutrióloga · Nutrición Clínica',
         email: 'elena@nucleodemo.mx',
-        role: 'Profesional',
-        description: 'Acceso exclusivo a su agenda de Nutrición.',
+        role: 'Especialista',
+        description: 'Agenda individual, expediente antropométrico/nutricional y WhatsApp propio (consultorio-nutriologa).',
+      },
+      {
+        label: 'Psicóloga · Psicología Clínica',
+        email: 'psicologa@nucleodemo.mx',
+        role: 'Especialista',
+        description: 'Agenda individual, notas psicoterapéuticas confidenciales y WhatsApp propio (consultorio-psicologa).',
       },
     ],
   });
@@ -1283,7 +1294,16 @@ app.get('/api/v1/catalog', async (c) => {
           p.color_hex,
           p.bio,
           p.is_public,
-          p.is_active
+          p.is_active,
+          p.whatsapp_instance_name,
+          p.whatsapp_status,
+          p.whatsapp_phone,
+          p.whatsapp_connected_at,
+          p.whatsapp_auto_confirm,
+          p.whatsapp_auto_reminder_24h,
+          p.whatsapp_auto_reminder_1h,
+          p.doctoralia_url,
+          p.doctoralia_sync_enabled
         FROM public.professionals p
         LEFT JOIN public.resources r ON r.id = p.default_resource_id AND r.organization_id = p.organization_id
         WHERE p.organization_id = ${user.organizationId}
@@ -1359,6 +1379,22 @@ app.get('/api/v1/catalog', async (c) => {
         LIMIT 50
       `;
 
+      const [integrations] = await tx`
+        SELECT
+          organization_id,
+          evolution_api_url,
+          evolution_api_key_encrypted,
+          confirm_template,
+          reschedule_template,
+          cancel_template,
+          reminder_24h_template,
+          reminder_1h_template,
+          auto_send_enabled,
+          doctoralia_bridge_mode
+        FROM public.organization_integrations
+        WHERE organization_id = ${user.organizationId}
+      `;
+
       return {
         organization,
         locations,
@@ -1367,6 +1403,7 @@ app.get('/api/v1/catalog', async (c) => {
         services,
         availabilityRules: rules,
         availabilityBlocks: blocks,
+        integrations: integrations || null,
       };
     },
     c.env
@@ -2023,4 +2060,546 @@ app.patch('/api/v1/organization/settings', async (c) => {
 
   return c.json(updated);
 });
+
+// -----------------------------------------------------------------------------
+// 10. Integración Evolution API (WhatsApp Individual por Especialista) y Doctoralia
+// -----------------------------------------------------------------------------
+app.get('/api/v1/integrations/settings', async (c) => {
+  const user = c.get('user');
+  const data = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const [row] = await tx`
+        SELECT
+          organization_id,
+          evolution_api_url,
+          evolution_api_key_encrypted,
+          confirm_template,
+          reschedule_template,
+          cancel_template,
+          reminder_24h_template,
+          reminder_1h_template,
+          auto_send_enabled,
+          doctoralia_bridge_mode
+        FROM public.organization_integrations
+        WHERE organization_id = ${user.organizationId}
+      `;
+      return row || null;
+    },
+    c.env
+  );
+
+  return c.json({ integrations: data, settings: data });
+});
+
+app.put('/api/v1/integrations/settings', async (c) => {
+  const user = c.get('user');
+  if (!['admin', 'reception'].includes(user.role)) {
+    return c.json({ error: 'Solo Dirección o la Asistente pueden actualizar la configuración de integraciones.' }, 403);
+  }
+
+  const body = await c.req.json<{
+    evolutionApiUrl?: string;
+    evolutionApiKey?: string;
+    confirmTemplate?: string;
+    rescheduleTemplate?: string;
+    cancelTemplate?: string;
+    reminder24hTemplate?: string;
+    reminder1hTemplate?: string;
+    autoSendEnabled?: boolean;
+    doctoraliaBridgeMode?: string;
+  }>();
+
+  const updated = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const [row] = await tx`
+        INSERT INTO public.organization_integrations (
+          organization_id,
+          evolution_api_url,
+          evolution_api_key_encrypted,
+          confirm_template,
+          reschedule_template,
+          cancel_template,
+          reminder_24h_template,
+          reminder_1h_template,
+          auto_send_enabled,
+          doctoralia_bridge_mode,
+          updated_at
+        )
+        VALUES (
+          ${user.organizationId},
+          ${body.evolutionApiUrl?.trim() || 'https://whatsapp.dragendas.com'},
+          ${body.evolutionApiKey?.trim() || ''},
+          ${body.confirmTemplate?.trim() || 'Hola {{paciente}}, te saluda tu {{especialista}}. Tu cita de {{servicio}} quedó confirmada para el {{fecha}} a las {{hora}} en {{sede}}. Gestiona o confirma tu asistencia aquí: {{link}}'},
+          ${body.rescheduleTemplate?.trim() || 'Hola {{paciente}}, tu cita con {{especialista}} ha sido reprogramada para el {{fecha}} a las {{hora}}.'},
+          ${body.cancelTemplate?.trim() || 'Hola {{paciente}}, tu cita con {{especialista}} del {{fecha}} a las {{hora}} ha sido cancelada.'},
+          ${body.reminder24hTemplate?.trim() || 'Recordatorio 24h: Hola {{paciente}}, mañana {{fecha}} a las {{hora}} tienes cita con {{especialista}} ({{servicio}}). Confirma tu asistencia en: {{link}}'},
+          ${body.reminder1hTemplate?.trim() || 'Recordatorio 1h: Hola {{paciente}}, te esperamos en 1 hora ({{hora}}) para tu consulta con {{especialista}} en {{sede}}.'},
+          ${body.autoSendEnabled !== false},
+          ${body.doctoraliaBridgeMode || 'email_and_ics'},
+          now()
+        )
+        ON CONFLICT (organization_id) DO UPDATE SET
+          evolution_api_url = COALESCE(${body.evolutionApiUrl?.trim() || null}, public.organization_integrations.evolution_api_url),
+          evolution_api_key_encrypted = COALESCE(${body.evolutionApiKey !== undefined ? body.evolutionApiKey.trim() : null}, public.organization_integrations.evolution_api_key_encrypted),
+          confirm_template = COALESCE(${body.confirmTemplate?.trim() || null}, public.organization_integrations.confirm_template),
+          reschedule_template = COALESCE(${body.rescheduleTemplate?.trim() || null}, public.organization_integrations.reschedule_template),
+          cancel_template = COALESCE(${body.cancelTemplate?.trim() || null}, public.organization_integrations.cancel_template),
+          reminder_24h_template = COALESCE(${body.reminder24hTemplate?.trim() || null}, public.organization_integrations.reminder_24h_template),
+          reminder_1h_template = COALESCE(${body.reminder1hTemplate?.trim() || null}, public.organization_integrations.reminder_1h_template),
+          auto_send_enabled = COALESCE(${body.autoSendEnabled !== undefined ? body.autoSendEnabled : null}, public.organization_integrations.auto_send_enabled),
+          doctoralia_bridge_mode = COALESCE(${body.doctoraliaBridgeMode || null}, public.organization_integrations.doctoralia_bridge_mode),
+          updated_at = now()
+        RETURNING *
+      `;
+      return row;
+    },
+    c.env
+  );
+
+  return c.json({ integrations: updated, settings: updated });
+});
+
+// Conectar / Obtener QR de WhatsApp de un especialista individual en Evolution API
+app.post('/api/v1/professionals/:id/whatsapp/connect', async (c) => {
+  const user = c.get('user');
+  const professionalId = c.req.param('id');
+  assertCanAccessProfessional(user, professionalId);
+
+  const body = await c.req.json<{
+    instanceName?: string;
+    whatsappPhone?: string;
+  }>();
+
+  const result = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const [prof] = await tx`
+        SELECT id, slug, full_name, whatsapp_instance_name, whatsapp_phone
+        FROM public.professionals
+        WHERE id = ${professionalId} AND organization_id = ${user.organizationId}
+      `;
+      if (!prof) {
+        throw Object.assign(new Error('Especialista no encontrada.'), { status: 404 });
+      }
+
+      const [integ] = await tx`
+        SELECT evolution_api_url, evolution_api_key_encrypted
+        FROM public.organization_integrations
+        WHERE organization_id = ${user.organizationId}
+      `;
+
+      const instanceName =
+        body.instanceName?.trim() ||
+        prof.whatsapp_instance_name ||
+        `consultorio-${prof.slug}`;
+
+      const evoRes = await connectEvolutionInstance({
+        baseUrl: integ?.evolution_api_url || 'https://whatsapp.dragendas.com',
+        apiKey: integ?.evolution_api_key_encrypted || '',
+        instanceName,
+      });
+
+      const nextStatus = evoRes.status === 'connected' ? 'connected' : 'qr_ready';
+      const [updatedProf] = await tx`
+        UPDATE public.professionals
+        SET
+          whatsapp_instance_name = ${instanceName},
+          whatsapp_status = ${nextStatus},
+          whatsapp_phone = COALESCE(${body.whatsappPhone?.trim() || null}, whatsapp_phone),
+          updated_at = now()
+        WHERE id = ${professionalId} AND organization_id = ${user.organizationId}
+        RETURNING *
+      `;
+
+      return {
+        professional: updatedProf,
+        evolution: evoRes,
+        instanceName: evoRes.instanceName,
+        qrCodeBase64: evoRes.qrBase64,
+      };
+    },
+    c.env
+  );
+
+  return c.json(result);
+});
+
+// Confirmar vinculación de WhatsApp personal o actualizar ajustes de WhatsApp/Doctoralia del especialista
+app.post('/api/v1/professionals/:id/whatsapp/confirm-link', async (c) => {
+  const user = c.get('user');
+  const professionalId = c.req.param('id');
+  assertCanAccessProfessional(user, professionalId);
+
+  const body = await c.req.json<{
+    status?: 'connected' | 'disconnected' | 'qr_ready';
+    whatsappPhone?: string;
+    instanceName?: string;
+    autoConfirm?: boolean;
+    autoReminder24h?: boolean;
+    autoReminder1h?: boolean;
+    doctoraliaUrl?: string;
+    doctoraliaSyncEnabled?: boolean;
+  }>();
+
+  const updated = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const [prof] = await tx`
+        UPDATE public.professionals
+        SET
+          whatsapp_status = COALESCE(${body.status || null}, whatsapp_status),
+          whatsapp_phone = COALESCE(${body.whatsappPhone?.trim() || null}, whatsapp_phone),
+          whatsapp_instance_name = COALESCE(${body.instanceName?.trim() || null}, whatsapp_instance_name),
+          whatsapp_connected_at = CASE
+            WHEN ${body.status || null} = 'connected' THEN now()
+            ELSE whatsapp_connected_at
+          END,
+          whatsapp_auto_confirm = COALESCE(${body.autoConfirm !== undefined ? body.autoConfirm : null}, whatsapp_auto_confirm),
+          whatsapp_auto_reminder_24h = COALESCE(${body.autoReminder24h !== undefined ? body.autoReminder24h : null}, whatsapp_auto_reminder_24h),
+          whatsapp_auto_reminder_1h = COALESCE(${body.autoReminder1h !== undefined ? body.autoReminder1h : null}, whatsapp_auto_reminder_1h),
+          doctoralia_url = COALESCE(${body.doctoraliaUrl !== undefined ? body.doctoraliaUrl.trim() : null}, doctoralia_url),
+          doctoralia_sync_enabled = COALESCE(${body.doctoraliaSyncEnabled !== undefined ? body.doctoraliaSyncEnabled : null}, doctoralia_sync_enabled),
+          updated_at = now()
+        WHERE id = ${professionalId} AND organization_id = ${user.organizationId}
+        RETURNING *
+      `;
+      if (!prof) {
+        throw Object.assign(new Error('Especialista no encontrada.'), { status: 404 });
+      }
+      return prof;
+    },
+    c.env
+  );
+
+  return c.json({ professional: updated });
+});
+
+// Enviar mensaje de prueba o notificación desde la instancia de WhatsApp personal del especialista
+app.post('/api/v1/professionals/:id/whatsapp/test', async (c) => {
+  const user = c.get('user');
+  const professionalId = c.req.param('id');
+  assertCanAccessProfessional(user, professionalId);
+
+  const body = await c.req.json<{
+    recipientPhone?: string;
+    patientName?: string;
+    templateType?: 'confirm' | 'reschedule' | 'cancel' | 'reminder_24h' | 'reminder_1h';
+  }>();
+
+  const res = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const [prof] = await tx`
+        SELECT p.*, l.name AS location_name
+        FROM public.professionals p
+        JOIN public.locations l ON l.id = p.default_location_id AND l.organization_id = p.organization_id
+        WHERE p.id = ${professionalId} AND p.organization_id = ${user.organizationId}
+      `;
+      if (!prof) {
+        throw Object.assign(new Error('Especialista no encontrada.'), { status: 404 });
+      }
+
+      const [integ] = await tx`
+        SELECT * FROM public.organization_integrations
+        WHERE organization_id = ${user.organizationId}
+      `;
+
+      const templateType = body.templateType || 'confirm';
+      const rawTemplate =
+        templateType === 'reschedule'
+          ? integ?.reschedule_template
+          : templateType === 'cancel'
+            ? integ?.cancel_template
+            : templateType === 'reminder_24h'
+              ? integ?.reminder_24h_template
+              : templateType === 'reminder_1h'
+                ? integ?.reminder_1h_template
+                : integ?.confirm_template;
+
+      const renderedMessage = renderWhatsAppTemplate(
+        rawTemplate ||
+          'Hola {{paciente}}, te saluda tu {{especialista}}. Tu cita quedó confirmada para el {{fecha}} a las {{hora}} en {{sede}}.',
+        {
+          paciente: body.patientName?.trim() || 'María Fernanda Soto',
+          especialista: prof.full_name,
+          especialidad: prof.specialty,
+          servicio: `Consulta de ${prof.specialty}`,
+          fecha: '17/10/2026',
+          hora: '11:00',
+          sede: prof.location_name || 'Núcleo Médico Especializado',
+          link: 'https://multiagenda.dragendas.com/reservar/nucleo-demo',
+        }
+      );
+
+      const targetPhone = body.recipientPhone?.trim() || prof.whatsapp_phone || '+525511223344';
+      const instanceName = prof.whatsapp_instance_name || `consultorio-${prof.slug}`;
+
+      const sendResult = await sendEvolutionWhatsAppMessage({
+        baseUrl: integ?.evolution_api_url || 'https://whatsapp.dragendas.com',
+        apiKey: integ?.evolution_api_key_encrypted || '',
+        instanceName,
+        phoneNormalized: targetPhone,
+        text: renderedMessage,
+      });
+
+      return {
+        sent: sendResult.sent,
+        simulated: sendResult.simulated,
+        instanceName,
+        senderPhone: prof.whatsapp_phone || 'WhatsApp Personal Vinculado',
+        recipientPhone: targetPhone,
+        renderedMessage,
+        providerResponse: sendResult.providerResponse,
+      };
+    },
+    c.env
+  );
+
+  return c.json(res);
+});
+
+// Simulación / Puente de cita entrante desde Doctoralia hacia la agenda del especialista
+app.post('/api/v1/integrations/doctoralia/simulate-booking', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{
+    professionalId?: string;
+    date?: string;
+    patientName?: string;
+    patientPhone?: string;
+  }>();
+
+  const targetDate = body.date || getLocalParts(new Date(), user.timezone).dateString;
+
+  const result = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const profId =
+        body.professionalId ||
+        (user.role === 'professional' ? user.professionalId : null);
+
+      const profRows = await tx`
+        SELECT p.*, l.name AS location_name
+        FROM public.professionals p
+        JOIN public.locations l ON l.id = p.default_location_id AND l.organization_id = p.organization_id
+        WHERE p.organization_id = ${user.organizationId}
+          ${profId ? tx`AND p.id = ${profId}` : tx``}
+        ORDER BY p.created_at ASC
+        LIMIT 1
+      `;
+      if (profRows.length === 0) {
+        throw Object.assign(new Error('No se encontró especialista para sincronizar con Doctoralia.'), { status: 404 });
+      }
+      const prof = profRows[0];
+
+      const [service] = await tx`
+        SELECT id, name FROM public.services
+        WHERE organization_id = ${user.organizationId} AND professional_id = ${prof.id} AND is_active = true
+        ORDER BY created_at ASC
+        LIMIT 1
+      `;
+      if (!service) {
+        throw Object.assign(new Error('La especialista no tiene servicios activos configurados.'), { status: 422 });
+      }
+
+      const slotsRes = await computeAvailableSlots(tx, {
+        organizationId: user.organizationId,
+        professionalId: prof.id,
+        serviceId: service.id,
+        dateStr: targetDate,
+      });
+
+      if (slotsRes.slots.length === 0) {
+        throw Object.assign(
+          new Error(`No hay horarios disponibles el ${targetDate} para reflejar la cita de Doctoralia.`),
+          { status: 409, code: 'NO_SLOTS_FOR_DOCTORALIA_SYNC' }
+        );
+      }
+
+      const chosenSlot = slotsRes.slots[0];
+      const patientName = body.patientName?.trim() || 'Lucía Domínguez (Paciente Doctoralia)';
+      const patientPhone = body.patientPhone?.trim() || '5566778899';
+
+      const created = await createBookingAtomic(tx, {
+        organizationId: user.organizationId,
+        professionalId: prof.id,
+        serviceId: service.id,
+        startsAtIso: chosenSlot.startsAt,
+        patientName,
+        patientPhone,
+        patientEmail: 'paciente.doctoralia@ejemplo.mx',
+        originChannel: 'referral',
+        campaignSource: 'doctoralia_sync',
+        adminNotes: `Cita sincronizada automáticamente desde Doctoralia (${prof.doctoralia_url || 'Perfil Doctoralia'}). Confirmación enviada por WhatsApp desde instancia ${prof.whatsapp_instance_name || prof.slug}.`,
+        policyAccepted: true,
+        idempotencyKey: `doctoralia-sim-${prof.id}-${chosenSlot.startsAt}-${Date.now()}`,
+        actorUserId: user.userId,
+        actorRole: user.role,
+        actorLabel: 'Puente Doctoralia Sync',
+      });
+
+      return {
+        appointment: created.appointment,
+        whatsappDispatchedFrom: prof.whatsapp_instance_name || `consultorio-${prof.slug}`,
+        specialistPhone: prof.whatsapp_phone || '+525500000000',
+      };
+    },
+    c.env
+  );
+
+  return c.json(result, 201);
+});
+
+// -----------------------------------------------------------------------------
+// 11. Expedientes Clínicos Individuales por Especialista (Aislamiento Estricto RLS)
+// -----------------------------------------------------------------------------
+app.get('/api/v1/clinical-records', async (c) => {
+  const user = c.get('user');
+  if (user.role === 'reception') {
+    return c.json(
+      {
+        error:
+          'Por privacidad médica (NOM-004 / RLS), la Asistente controla la agenda y cobros pero no tiene acceso a las notas clínicas privadas de cada especialista.',
+        code: 'FORBIDDEN_CLINICAL_RECORDS_FOR_ASSISTANT',
+      },
+      403
+    );
+  }
+
+  const patientId = c.req.query('patient_id') || null;
+  const professionalId = c.req.query('professional_id') || null;
+
+  if (professionalId) {
+    assertCanAccessProfessional(user, professionalId);
+  }
+
+  const effectiveProfId =
+    user.role === 'professional' ? user.professionalId : professionalId;
+
+  const records = await withUserRls(
+    user.userId,
+    async (tx) => {
+      return tx`
+        SELECT
+          cr.id,
+          cr.organization_id,
+          cr.patient_id,
+          pat.full_name AS patient_name,
+          pat.phone_display AS patient_phone,
+          cr.professional_id,
+          p.full_name AS professional_name,
+          p.specialty AS professional_specialty,
+          cr.appointment_id,
+          cr.specialty_type,
+          cr.chief_complaint,
+          cr.evolution_notes,
+          COALESCE(cr.subjective_notes, cr.evolution_notes) AS subjective_notes,
+          cr.objective_notes,
+          cr.diagnosis,
+          cr.treatment_plan,
+          cr.vital_signs,
+          cr.specialty_data,
+          cr.created_at,
+          cr.updated_at
+        FROM public.clinical_records cr
+        JOIN public.patients pat ON pat.id = cr.patient_id AND pat.organization_id = cr.organization_id
+        JOIN public.professionals p ON p.id = cr.professional_id AND p.organization_id = cr.organization_id
+        WHERE cr.organization_id = ${user.organizationId}
+          ${effectiveProfId ? tx`AND cr.professional_id = ${effectiveProfId}` : tx``}
+          ${patientId ? tx`AND cr.patient_id = ${patientId}` : tx``}
+        ORDER BY cr.created_at DESC
+        LIMIT 100
+      `;
+    },
+    c.env
+  );
+
+  return c.json({ records });
+});
+
+app.post('/api/v1/clinical-records', async (c) => {
+  const user = c.get('user');
+  if (user.role === 'reception') {
+    return c.json(
+      {
+        error: 'La Asistente no puede crear ni editar notas de expediente clínico.',
+        code: 'FORBIDDEN_CLINICAL_RECORDS_FOR_ASSISTANT',
+      },
+      403
+    );
+  }
+
+  const body = await c.req.json<{
+    patientId?: string;
+    professionalId?: string;
+    appointmentId?: string | null;
+    specialtyType?: string;
+    chiefComplaint?: string;
+    subjectiveNotes?: string;
+    objectiveNotes?: string;
+    diagnosis?: string;
+    treatmentPlan?: string;
+    vitalSigns?: Record<string, string | number>;
+    specialtyData?: Record<string, string | number>;
+  }>();
+
+  const targetProfId =
+    user.role === 'professional' ? user.professionalId : body.professionalId;
+
+  if (!body.patientId || !targetProfId || !body.chiefComplaint?.trim()) {
+    return c.json(
+      { error: 'Seleccione paciente, especialista y motivo de consulta (chiefComplaint).' },
+      422
+    );
+  }
+
+  assertCanAccessProfessional(user, targetProfId);
+
+  const created = await withUserRls(
+    user.userId,
+    async (tx) => {
+      const [rec] = await tx`
+        INSERT INTO public.clinical_records (
+          organization_id,
+          patient_id,
+          professional_id,
+          appointment_id,
+          specialty_type,
+          chief_complaint,
+          evolution_notes,
+          subjective_notes,
+          objective_notes,
+          diagnosis,
+          treatment_plan,
+          vital_signs,
+          specialty_data,
+          created_by
+        )
+        VALUES (
+          ${user.organizationId},
+          ${body.patientId!},
+          ${targetProfId!},
+          ${body.appointmentId || null},
+          ${body.specialtyType || 'general'},
+          ${body.chiefComplaint!.trim()},
+          ${body.subjectiveNotes?.trim() || ''},
+          ${body.subjectiveNotes?.trim() || null},
+          ${body.objectiveNotes?.trim() || null},
+          ${body.diagnosis?.trim() || null},
+          ${body.treatmentPlan?.trim() || null},
+          ${JSON.stringify(body.vitalSigns || {})}::jsonb,
+          ${JSON.stringify(body.specialtyData || {})}::jsonb,
+          ${user.userId}
+        )
+        RETURNING *
+      `;
+      return rec;
+    },
+    c.env
+  );
+
+  return c.json({ record: created }, 201);
+});
+
 

@@ -63,9 +63,53 @@ export interface ProfessionalDTO {
   license_number: string | null;
   color_hex: string;
   bio: string | null;
+  whatsapp_instance_name?: string | null;
+  whatsapp_status?: 'disconnected' | 'connecting' | 'connected';
+  whatsapp_phone?: string | null;
+  whatsapp_auto_confirm?: boolean;
+  whatsapp_auto_reminder_24h?: boolean;
+  whatsapp_auto_reminder_1h?: boolean;
+  doctoralia_url?: string | null;
+  doctoralia_sync_enabled?: boolean;
   is_public: boolean;
   is_active: boolean;
   appointments_today_count?: number;
+}
+
+export interface ClinicalRecordDTO {
+  id: string;
+  organization_id: string;
+  patient_id: string;
+  patient_name: string;
+  patient_phone: string;
+  professional_id: string;
+  professional_name: string;
+  professional_specialty: string;
+  appointment_id: string | null;
+  specialty_type: 'ginecologia' | 'medicina_interna' | 'nutricion' | 'psicologia' | 'general';
+  chief_complaint: string;
+  subjective_notes?: string | null;
+  objective_notes?: string | null;
+  evolution_notes?: string | null;
+  diagnosis: string | null;
+  treatment_plan: string | null;
+  vital_signs: Record<string, string | number>;
+  specialty_data: Record<string, string | number>;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface OrganizationIntegrationsDTO {
+  organization_id: string;
+  evolution_api_url: string;
+  evolution_api_key_encrypted?: string | null;
+  confirm_template: string;
+  reschedule_template: string;
+  cancel_template: string;
+  reminder_24h_template: string;
+  reminder_1h_template: string;
+  auto_send_enabled: boolean;
+  doctoralia_bridge_mode: string;
 }
 
 export interface ServiceDTO {

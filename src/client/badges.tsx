@@ -87,9 +87,9 @@ export const FINANCIAL_LABELS: Record<
 
 export const ORIGIN_LABELS: Record<OriginChannel, string> = {
   public_link: 'Enlace público',
-  whatsapp_manual: 'WhatsApp recepción',
+  whatsapp_manual: 'WhatsApp Asistente',
   phone: 'Llamada telefónica',
-  reception: 'Recepción presencial',
+  reception: 'Asistente presencial',
   facebook: 'Campaña Facebook',
   google: 'Campaña Google',
   referral: 'Paciente referido',
