@@ -69,16 +69,15 @@ services:
     networks:
       - dragendas_evo_net
 
-  # Opcional: Si usas un túnel de Cloudflare dedicado para whatsapp.dragendas.com
-  # descomenta este bloque o agrega el Public Hostname whatsapp.dragendas.com -> http://host.docker.internal:8081
-  # en tu panel de Cloudflare Zero Trust -> Networks -> Tunnels.
-  # dragendas_cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   container_name: dragendas_cloudflared
-  #   restart: always
-  #   command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-  #   networks:
-  #     - dragendas_evo_net
+  dragendas_cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: dragendas_cloudflared
+    restart: always
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - dragendas_evolution_api
+    networks:
+      - dragendas_evo_net
 
 volumes:
   dragendas_evolution_instances:
