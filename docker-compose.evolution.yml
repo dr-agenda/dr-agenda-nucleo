@@ -10,7 +10,7 @@
 
 services:
   dragendas_evolution_api:
-    image: atendai/evolution-api:v2.1.1
+    image: evoapicloud/evolution-api:latest
     container_name: dragendas_evolution_api
     restart: always
     ports:
@@ -18,21 +18,26 @@ services:
     environment:
       - SERVER_URL=https://whatsapp.dragendas.com
       - AUTHENTICATION_TYPE=apikey
-      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-DrAgendas_WA_ClaveSecreta_2026_CambiaEsto}
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-DrAgendas_WA_ClaveSecreta_2026_Demo}
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
-      - DATABASE_CONNECTION_URI=postgresql://postgres:dragendas_evo_pass@dragendas_evolution_postgres:5432/evolution_dragendas?schema=public
+      - DATABASE_CONNECTION_URI=postgresql://postgres:dragendas_evo_pass@dragendas_evolution_postgres:5432/evolution_dragendas
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_dragendas
       - DATABASE_SAVE_DATA_INSTANCE=true
       - DATABASE_SAVE_DATA_NEW_MESSAGE=true
       - DATABASE_SAVE_MESSAGE_UPDATE=true
       - DATABASE_SAVE_DATA_CONTACTS=true
       - DATABASE_SAVE_DATA_CHATS=true
       - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_URI=redis://dragendas_evolution_redis:6379/1
+      - CACHE_REDIS_URI=redis://dragendas_evolution_redis:6379
       - CACHE_REDIS_PREFIX_KEY=dragendas_evo
+      - CACHE_REDIS_SAVE_INSTANCES=false
+      - WEBHOOK_GLOBAL_ENABLED=false
       - DEL_INSTANCE=false
-      - QRCODE_LIMIT=30
+      - LOG_LEVEL=DEBUG
+      - LOG_COLOR=true
+      - LOG_BAILEYS=debug
     volumes:
       - dragendas_evolution_instances:/evolution/instances
     depends_on:
