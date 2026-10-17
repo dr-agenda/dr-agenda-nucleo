@@ -44,7 +44,10 @@ services:
       - dragendas_evolution_postgres
       - dragendas_evolution_redis
     networks:
-      - dragendas_evo_net
+      dragendas_evo_net:
+        aliases:
+          - dragendas-evolution-api
+          - evolution-api
 
   dragendas_evolution_postgres:
     image: postgres:15-alpine
