@@ -61,13 +61,27 @@ app.onError((err, c) => {
 
 // Salud del servicio
 app.get('/api/v1/health', async (c) => {
-  const sql = getSql(c.env);
-  const [res] = await sql`SELECT now() AS server_time`;
-  return c.json({
-    status: 'ok',
-    service: 'dr-agenda-nucleos-api',
-    serverTime: res.server_time,
-  });
+  try {
+    const sql = getSql(c.env);
+    const [res] = await sql`SELECT now() AS server_time`;
+    return c.json({
+      status: 'ok',
+      service: 'dr-agenda-nucleos-api',
+      database: 'connected',
+      serverTime: res.server_time,
+    });
+  } catch (err) {
+    const e = err as Error;
+    return c.json(
+      {
+        status: 'degraded',
+        service: 'dr-agenda-nucleos-api',
+        database: 'error',
+        error: e.message || 'Database connection error',
+      },
+      503
+    );
+  }
 });
 
 // -----------------------------------------------------------------------------

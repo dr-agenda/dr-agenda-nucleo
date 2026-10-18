@@ -28,6 +28,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
+  // Solo interceptar recursos del mismo origen (no beacons externos como Cloudflare Insights)
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
   // Jamás cachear llamadas a la API ni métodos distintos de GET
   if (url.pathname.startsWith('/api/') || event.request.method !== 'GET') {
     return;
@@ -38,9 +43,10 @@ self.addEventListener('fetch', (event) => {
       const cached = await caches.match(event.request);
       if (cached) return cached;
       if (event.request.mode === 'navigate') {
-        return caches.match('/index.html');
+        const fallback = await caches.match('/index.html');
+        if (fallback) return fallback;
       }
-      throw new Error('Sin conexión de red');
+      return new Response('Sin conexión de red', { status: 503, statusText: 'Offline' });
     })
   );
 });

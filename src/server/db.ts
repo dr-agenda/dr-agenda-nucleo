@@ -12,18 +12,85 @@ export interface ServerEnv {
 }
 
 const DEFAULT_LOCAL_DB_URL = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+const DEFAULT_SUPABASE_POOLER_URL =
+  'postgresql://postgres.fpflsnztmdcmwcgtbscw:mzJ7Y_b5AE%25%21g%24B@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require';
 
 let cachedSql: Sql | null = null;
 let cachedDbUrl: string | null = null;
 
-export function getSql(env?: ServerEnv): Sql {
-  const dbUrl =
-    env?.DATABASE_URL ||
-    (typeof process !== 'undefined' ? process.env.DATABASE_URL : undefined) ||
-    DEFAULT_LOCAL_DB_URL;
+export function normalizeDatabaseUrl(rawUrl?: string): string {
+  if (!rawUrl || rawUrl.trim() === '') {
+    return DEFAULT_SUPABASE_POOLER_URL;
+  }
 
+  let str = rawUrl.trim();
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    str = str.slice(1, -1);
+  }
+
+  // Si en Cloudflare Worker viene configurado localhost o 127.0.0.1, redirigir a Supabase remoto
+  if (str.includes('127.0.0.1') || str.includes('localhost')) {
+    return DEFAULT_SUPABASE_POOLER_URL;
+  }
+
+  // Si contiene el dominio directo de Supabase (ej. db.fpflsnztmdcmwcgtbscw.supabase.co),
+  // este solo cuenta con IPv6 en Supabase gratuito y Cloudflare Worker TCP sockets no puede
+  // resolverlo (provoca el error "proxy request failed, cannot connect to the specified address").
+  // Se redirige automáticamente al Connection Pooler IPv4 con el usuario postgres.<projectRef>.
+  const directMatch = str.match(/@db\.([a-z0-9]+)\.supabase\.co(?::(\d+))?\/([a-zA-Z0-9_\-]+)/);
+  if (directMatch) {
+    const projectRef = directMatch[1];
+    const dbName = directMatch[3] || 'postgres';
+
+    const protoEnd = str.indexOf('://');
+    const atIndex = str.indexOf('@');
+    if (protoEnd !== -1 && atIndex !== -1) {
+      const auth = str.slice(protoEnd + 3, atIndex);
+      const colonIndex = auth.indexOf(':');
+      let password = colonIndex !== -1 ? auth.slice(colonIndex + 1) : '';
+      if (password.includes('%!') && !password.includes('%25!')) {
+        password = password.replace(/%!/g, '%25%21');
+      }
+      if (password.includes('$') && !password.includes('%24')) {
+        password = password.replace(/\$/g, '%24');
+      }
+      return `postgresql://postgres.${projectRef}:${password}@aws-0-us-east-1.pooler.supabase.com:5432/${dbName}?sslmode=require`;
+    }
+  }
+
+  // Si es el Connection Pooler pero la contraseña contiene %! sin escapar
+  if (str.includes('pooler.supabase.com')) {
+    if (str.includes('%!') && !str.includes('%25!')) {
+      str = str.replace(/%!/g, '%25%21');
+    }
+    if (str.includes('$') && !str.includes('%24')) {
+      str = str.replace(/\$/g, '%24');
+    }
+    if (!str.includes('sslmode=')) {
+      str += (str.includes('?') ? '&' : '?') + 'sslmode=require';
+    }
+    return str;
+  }
+
+  return str;
+}
+
+export function getSql(env?: ServerEnv): Sql {
   const isCloudflareWorker =
     typeof navigator !== 'undefined' && navigator.userAgent === 'Cloudflare-Workers';
+
+  const rawUrl =
+    env?.DATABASE_URL ||
+    (typeof process !== 'undefined' ? process.env.DATABASE_URL : undefined);
+
+  let dbUrl: string;
+  if (!rawUrl || rawUrl.trim() === '') {
+    dbUrl = isCloudflareWorker ? DEFAULT_SUPABASE_POOLER_URL : DEFAULT_LOCAL_DB_URL;
+  } else {
+    dbUrl = isCloudflareWorker ? normalizeDatabaseUrl(rawUrl) : rawUrl;
+  }
+
+  const isSupabase = dbUrl.includes('supabase.co') || dbUrl.includes('supabase.com');
 
   if (isCloudflareWorker) {
     return postgres(dbUrl, {
@@ -32,6 +99,7 @@ export function getSql(env?: ServerEnv): Sql {
       connect_timeout: 10,
       prepare: false,
       fetch_types: false,
+      ssl: isSupabase ? 'require' : undefined,
       onnotice: () => {},
     });
   }
@@ -42,6 +110,7 @@ export function getSql(env?: ServerEnv): Sql {
       idle_timeout: 20,
       connect_timeout: 10,
       prepare: false,
+      ssl: isSupabase ? 'require' : undefined,
       onnotice: () => {},
     });
     cachedDbUrl = dbUrl;
