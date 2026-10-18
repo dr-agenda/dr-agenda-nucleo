@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/server/dev-server.ts",
     "dev:vite": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && esbuild src/worker.ts --bundle --outfile=dist/_worker.js --format=esm --target=es2022 --platform=node",
     "preview": "wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "db:migrate": "tsx scripts/migrate.ts",

@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "dr-agenda-nucleos" generated at 2026-10-18T01:32:18.998Z.
