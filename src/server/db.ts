@@ -3,6 +3,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export interface ServerEnv {
   DATABASE_URL?: string;
+  HYPERDRIVE?: {
+    connectionString: string;
+  };
   SUPABASE_URL?: string;
   SUPABASE_ANON_KEY?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
@@ -78,6 +81,17 @@ export function normalizeDatabaseUrl(rawUrl?: string): string {
 }
 
 export function getSql(env?: ServerEnv): Sql {
+  if (env?.HYPERDRIVE?.connectionString) {
+    return postgres(env.HYPERDRIVE.connectionString, {
+      max: 5,
+      idle_timeout: 30,
+      connect_timeout: 10,
+      prepare: false,
+      ssl: false,
+      onnotice: () => {},
+    });
+  }
+
   const isCloudflareWorker =
     typeof (globalThis as unknown as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined' ||
     (typeof navigator !== 'undefined' && /Cloudflare/i.test(navigator.userAgent || ''));
