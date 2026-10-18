@@ -1,0 +1,9 @@
+name = "dr-agenda-nucleos"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+[vars]
+ENVIRONMENT = "production"
+PUBLIC_APP_URL = "https://multiagenda.dragendas.com"
+EVOLUTION_API_URL = "https://whatsapp.dragendas.com"

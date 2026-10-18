@@ -13,23 +13,8 @@
     "not_found_handling": "single-page-application"
   },
   "vars": {
-    "ENVIRONMENT": "development",
-    "PUBLIC_APP_URL": "http://localhost:8787"
-  },
-  "env": {
-    "staging": {
-      "name": "dr-agenda-nucleos-staging",
-      "vars": {
-        "ENVIRONMENT": "staging",
-        "PUBLIC_APP_URL": "https://staging.dr-agenda-nucleos.workers.dev"
-      }
-    },
-    "production": {
-      "name": "dr-agenda-nucleos-prod",
-      "vars": {
-        "ENVIRONMENT": "production",
-        "PUBLIC_APP_URL": "https://multiagenda.dragendas.com"
-      }
-    }
+    "ENVIRONMENT": "production",
+    "PUBLIC_APP_URL": "https://multiagenda.dragendas.com",
+    "EVOLUTION_API_URL": "https://whatsapp.dragendas.com"
   }
 }
