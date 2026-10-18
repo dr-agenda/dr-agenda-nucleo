@@ -13,7 +13,7 @@ export interface ServerEnv {
 
 const DEFAULT_LOCAL_DB_URL = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 const DEFAULT_SUPABASE_POOLER_URL =
-  'postgresql://postgres.fpflsnztmdcmwcgtbscw:mzJ7Y_b5AE%25%21g%24B@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require';
+  'postgresql://postgres.fpflsnztmdcmwcgtbscw:mzJ7Y_b5AE%25%21g%24B@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require';
 
 let cachedSql: Sql | null = null;
 let cachedDbUrl: string | null = null;
@@ -36,7 +36,8 @@ export function normalizeDatabaseUrl(rawUrl?: string): string {
   // Si contiene el dominio directo de Supabase (ej. db.fpflsnztmdcmwcgtbscw.supabase.co),
   // este solo cuenta con IPv6 en Supabase gratuito y Cloudflare Worker TCP sockets no puede
   // resolverlo (provoca el error "proxy request failed, cannot connect to the specified address").
-  // Se redirige automáticamente al Connection Pooler IPv4 con el usuario postgres.<projectRef>.
+  // Se redirige automáticamente al Connection Pooler IPv4 en puerto 6543 (Transaction Mode para Serverless)
+  // con el usuario obligatorio postgres.<projectRef>.
   const directMatch = str.match(/@db\.([a-z0-9]+)\.supabase\.co(?::(\d+))?\/([a-zA-Z0-9_\-]+)/);
   if (directMatch) {
     const projectRef = directMatch[1];
@@ -54,12 +55,13 @@ export function normalizeDatabaseUrl(rawUrl?: string): string {
       if (password.includes('$') && !password.includes('%24')) {
         password = password.replace(/\$/g, '%24');
       }
-      return `postgresql://postgres.${projectRef}:${password}@aws-0-us-east-1.pooler.supabase.com:5432/${dbName}?sslmode=require`;
+      return `postgresql://postgres.${projectRef}:${password}@aws-0-us-east-1.pooler.supabase.com:6543/${dbName}?sslmode=require`;
     }
   }
 
-  // Si es el Connection Pooler pero la contraseña contiene %! sin escapar
+  // Si es el Connection Pooler, asegurar puerto 6543 para Serverless/Cloudflare Workers
   if (str.includes('pooler.supabase.com')) {
+    str = str.replace(/:5432\b/, ':6543');
     if (str.includes('%!') && !str.includes('%25!')) {
       str = str.replace(/%!/g, '%25%21');
     }
@@ -77,7 +79,8 @@ export function normalizeDatabaseUrl(rawUrl?: string): string {
 
 export function getSql(env?: ServerEnv): Sql {
   const isCloudflareWorker =
-    typeof navigator !== 'undefined' && navigator.userAgent === 'Cloudflare-Workers';
+    typeof (globalThis as unknown as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined' ||
+    (typeof navigator !== 'undefined' && /Cloudflare/i.test(navigator.userAgent || ''));
 
   const rawUrl =
     env?.DATABASE_URL ||
@@ -94,8 +97,8 @@ export function getSql(env?: ServerEnv): Sql {
 
   if (isCloudflareWorker) {
     return postgres(dbUrl, {
-      max: 2,
-      idle_timeout: 1,
+      max: 1,
+      idle_timeout: 0,
       connect_timeout: 10,
       prepare: false,
       fetch_types: false,
