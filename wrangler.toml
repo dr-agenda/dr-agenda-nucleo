@@ -3,6 +3,10 @@ compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist"
 
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "a13e7041be6e47caaf099b9dbda11d52"
+
 [vars]
 ENVIRONMENT = "production"
 PUBLIC_APP_URL = "https://multiagenda.dragendas.com"
