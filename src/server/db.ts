@@ -15,15 +15,16 @@ export interface ServerEnv {
 }
 
 const DEFAULT_LOCAL_DB_URL = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const DEFAULT_SUPABASE_POOLER_URL =
-  'postgresql://postgres.fpflsnztmdcmwcgtbscw:mzJ7Y_b5AE%25%21g%24B@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require';
 
 let cachedSql: Sql | null = null;
 let cachedDbUrl: string | null = null;
 
+const MISSING_DB_URL_MESSAGE =
+  'DATABASE_URL no está configurada en Cloudflare (Settings > Variables and Secrets) y no hay binding HYPERDRIVE.';
+
 export function normalizeDatabaseUrl(rawUrl?: string): string {
   if (!rawUrl || rawUrl.trim() === '') {
-    return DEFAULT_SUPABASE_POOLER_URL;
+    throw new Error(MISSING_DB_URL_MESSAGE);
   }
 
   let str = rawUrl.trim();
@@ -31,9 +32,11 @@ export function normalizeDatabaseUrl(rawUrl?: string): string {
     str = str.slice(1, -1);
   }
 
-  // Si en Cloudflare Worker viene configurado localhost o 127.0.0.1, redirigir a Supabase remoto
+  // En un Worker, localhost/127.0.0.1 nunca es alcanzable
   if (str.includes('127.0.0.1') || str.includes('localhost')) {
-    return DEFAULT_SUPABASE_POOLER_URL;
+    throw new Error(
+      'DATABASE_URL apunta a localhost; en Cloudflare debe apuntar al pooler de Supabase.'
+    );
   }
 
   // Si contiene el dominio directo de Supabase (ej. db.fpflsnztmdcmwcgtbscw.supabase.co),
@@ -102,7 +105,8 @@ export function getSql(env?: ServerEnv): Sql {
 
   let dbUrl: string;
   if (!rawUrl || rawUrl.trim() === '') {
-    dbUrl = isCloudflareWorker ? DEFAULT_SUPABASE_POOLER_URL : DEFAULT_LOCAL_DB_URL;
+    if (isCloudflareWorker) throw new Error(MISSING_DB_URL_MESSAGE);
+    dbUrl = DEFAULT_LOCAL_DB_URL;
   } else {
     dbUrl = isCloudflareWorker ? normalizeDatabaseUrl(rawUrl) : rawUrl;
   }
