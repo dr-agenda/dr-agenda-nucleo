@@ -22,11 +22,26 @@ export function getSql(env?: ServerEnv): Sql {
     (typeof process !== 'undefined' ? process.env.DATABASE_URL : undefined) ||
     DEFAULT_LOCAL_DB_URL;
 
+  const isCloudflareWorker =
+    typeof navigator !== 'undefined' && navigator.userAgent === 'Cloudflare-Workers';
+
+  if (isCloudflareWorker) {
+    return postgres(dbUrl, {
+      max: 2,
+      idle_timeout: 1,
+      connect_timeout: 10,
+      prepare: false,
+      fetch_types: false,
+      onnotice: () => {},
+    });
+  }
+
   if (!cachedSql || cachedDbUrl !== dbUrl) {
     cachedSql = postgres(dbUrl, {
       max: 15,
       idle_timeout: 20,
       connect_timeout: 10,
+      prepare: false,
       onnotice: () => {},
     });
     cachedDbUrl = dbUrl;
